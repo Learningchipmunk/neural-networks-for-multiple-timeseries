@@ -1,0 +1,22 @@
+## Training, model and environment variables
+EPOCHS = 10
+PADDING_VALUE = -1
+LR = 1e-4
+add_padding=True
+batch_size = 1
+max_seq_len = 6000
+conf_path = 'Configs/retnet-small-6gbvram/config.json'
+input_dim = len(numeraidata.feature_cols)
+output_dim = len(numeraidata.target_names)
+save_best_model=True 
+save_path="Results/Small_RetNet_CorrectPearsonCorr/" #_MSEonly
+load_model_from_path=True
+early_stopping_patience=3
+
+# Loss params
+lambda_mse  = 1.0
+lambda_corr = 1.0
+
+# Uses device available (GPU or CPU)
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+device
