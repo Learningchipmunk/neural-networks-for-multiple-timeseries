@@ -1,3 +1,5 @@
+## Ignore Personal API keys
+api_keys.json
 
 ## Ignore data
 *.csv
