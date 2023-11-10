@@ -1,21 +1,25 @@
-
 import os
 import torch
-# import ta
 import requests
 import json
+import datetime
 import pandas as pd
 import pandas_datareader as pdr
 import numpy as np
 import yfinance as yf
+import matplotlib.pyplot as plt
 
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 from numerapi import NumerAPI
 from datasets import load_dataset
+import requests
+import datetime
 
-
-EODHD_news_api_key = '654cea806906e1.04970075' 
+with open('api_keys.json') as f:
+    api_keys = json.load(f)
+EODHD_news_api_key = api_keys['EODHD_news_api_key']
+NewsAPI_key = api_keys['NewsAPI_key']	
 
 class NumeraiData:
     '''Downloads the latest Numerai data using the NumerAPI + Loads them using pandas. Example usage:
@@ -189,6 +193,7 @@ class NumeraiDataset(Dataset):
 # Faire du weekly prediction
 class CryptoDataset(Dataset):
     def __init__(self, start_date, end_date):
+        # pip install newsapi-python
         # Download cryptocurrency price data
         yf.pdr_override()
         btc = pdr.get_data_yahoo('BTC-USD', start_date, end_date)
@@ -232,40 +237,45 @@ class CryptoDataset(Dataset):
         return features, target
 
 class CryptoMetrics:
-    def __init__(self, symbol, interval):
-        self.symbol = symbol
+    def __init__(self, symbols, interval, start_date, end_date):
+        self.symbols = symbols
         self.interval = interval
-        self.data = self.get_binance_data()
+        self.start_date = start_date
+        self.end_date = end_date
+        self.data = self.get_crypto_data()
 
-    def get_binance_data(self):
+    def get_crypto_data(self):
         url = "https://api.binance.com/api/v3/klines"
-        params = {
-            "symbol": self.symbol,
-            "interval": self.interval
-        }
-        response = requests.get(url, params=params)
-        data = response.json()
-        df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close", "volume", "close_time", "quote_asset_volume", "number_of_trades", "taker_buy_base_asset_volume", "taker_buy_quote_asset_volume", "ignore"])
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        df.set_index("timestamp", inplace=True)
-        return df
+        dfs = []
+        for symbol in self.symbols:
+            df = pdr.data.get_data_yahoo(symbol, self.start_date, self.end_date, period='1d')
+            
+            # Do not concatenate if dataframe is empty
+            if not df.empty:
+                df['Crypto_Symbol'] = symbol.split('-USD')[0]            
+                dfs.append(df)
+            
+        data = pd.concat(dfs, axis=0).sort_index()
+        data.index = pd.MultiIndex.from_arrays([data.index.to_list(), data.Crypto_Symbol.to_list()], names=['Date', 'Crypto_Symbol'])
+
+        return data
 
     def compute_volatility(self):
-        log_returns = np.log(self.data['close'] / self.data['close'].shift(1))
+        log_returns = np.log(self.data['Close'] / self.data.groupby(level=1)['Close'].shift(1))
         volatility = log_returns.std() * np.sqrt(252)
         return volatility
     
     def compute_return(self, d):
-        return (self.data['close'].shift(d) - self.data['close']) / self.data['close']
+        return (self.data.groupby(level=1)['Close'].shift(-d) - self.data['Close']) / self.data['Close']
 
     def compute_first_derivative(self):
-        return self.data['close'].diff()        
+        return self.data.groupby(level=1)['Close'].diff()        
 
     def compute_moving_average(self, window):
-        return self.data['close'].rolling(window=window).mean()
+        return self.data.groupby(level=1)['Close'].rolling(window=window).mean()
 
     def compute_rsi(self, window):
-        delta = self.data['close'].diff()
+        delta = self.compute_first_derivative()
         gain = delta.where(delta > 0, 0)
         loss = -delta.where(delta < 0, 0)
         avg_gain = gain.rolling(window=window).mean()
@@ -275,20 +285,20 @@ class CryptoMetrics:
         return rsi
 
     def compute_macd(self, fast_window, slow_window, signal_window):
-        ema_fast = self.data['close'].ewm(span=fast_window, adjust=False).mean()
-        ema_slow = self.data['close'].ewm(span=slow_window, adjust=False).mean()
+        ema_fast = self.data.groupby(level=1)['Close'].ewm(span=fast_window, adjust=False).mean()
+        ema_slow = self.data.groupby(level=1)['Close'].ewm(span=slow_window, adjust=False).mean()
         macd = ema_fast - ema_slow
         signal = macd.ewm(span=signal_window, adjust=False).mean()
         return macd, signal
 
     def compute_obv(self):
-        obv = np.where(self.data['close'] > self.data['close'].shift(1), self.data['volume'], -self.data['volume'])
+        obv = np.where(self.data['Close'] > self.data.groupby(level=1)['Close'].shift(1), self.data['Volume'], -self.data['Volume'])
         obv = obv.cumsum()
         return obv
 
     def compute_mfi(self, window):
-        typical_price = (self.data['high'] + self.data['low'] + self.data['close']) / 3
-        raw_money_flow = typical_price * self.data['volume']
+        typical_price = (self.data['High'] + self.data['Low'] + self.data['Close']) / 3
+        raw_money_flow = typical_price * self.data['Volume']
         positive_flow = np.where(typical_price > typical_price.shift(1), raw_money_flow, 0)
         negative_flow = np.where(typical_price < typical_price.shift(1), raw_money_flow, 0)
         positive_flow_sum = positive_flow.rolling(window=window).sum()
@@ -298,34 +308,109 @@ class CryptoMetrics:
         return mfi
 
 
+def get_crypto_news(crypto_symbol, api_key, start_date=datetime.datetime(2023, 10, 1), end_date=datetime.datetime(2023, 10, 2)):
+    start_date_str = start_date.strftime('%Y-%m-%d')
+    end_date_str = end_date.strftime('%Y-%m-%d')
+    url = f'https://eodhistoricaldata.com/api/news?api_token={api_key}&s={crypto_symbol}&from={start_date_str}&to={end_date_str}'
+    news_json = requests.get(url).json()
+    
+    data_dict = {'date':[], 'title':[], 'sentiment':[]}
+    
+    for el in news_json:
+        data_dict['date'].append(el['date'])
+        data_dict['title'].append(el['title'])
+        data_dict['sentiment'].append(el['sentiment'])
+            
+    return pd.DataFrame(data_dict)
 
 if __name__ == "__main__":
+    ## top 30 Cryptos by volume traded (24h) https://finance.yahoo.com/u/yahoo-finance/watchlists/crypto-top-volume-24hr/
+    # Removed TUSD, USDC, USDCE, USDT because they are stable coins
+    # Added "BCH-USD", "ALGO-USD", "MANA-USD" instead
+    # Added Symbold from binance, the objective is to reach 50 symbols
+    symbols = [
+    "BTC-USD", "ETH-USD", "BNB-USD", "XRP-USD", "SOL-USD", "ADA-USD", "DOGE-USD", "TRX-USD", 
+    "LINK-USD", "MATIC-USD", "DOT-USD", "WBTC-USD", "LTC-USD", "DAI-USD", "SHIB-USD", "BCH-USD",   
+    "AVAX-USD", "XLM-USD", "ATOM-USD", "ETC-USD", "UNI-USD", "FIL-USD", "LDO-USD", "HBAR-USD", "APT-USD",
+    "BTCB-USD", "BUSD-USD", "ARB11841-USD", "NEO-USD", "FDUSD-USD", "GALA-USD", "PEPE24478-USD", "ORDI-USD", 
+    "STORJ-USD", "GAS-USD", "MEME28301-USD", "HIFI23037-USD", "WETH-USD", "MANA-USD", "ALGO-USD",
+    "ICP-USD", "WBET-USD", "VET-USD", "OP-USD", "ARB-USD", "NEAR-USD", "AAVE-USD", "INJ-USD", "MKR-USD", "RUNE-USD",
+    "QNT-USD", "GRT-USD", "IMX-USD", "EGLD-USD"
+    ]#, "TUSD-USD", "USDC-USD", "USDCE-USD", "USDT-USD"
+    
+    # Dataset starts in the middle of the first crypto boom, volatility is high.
+    start_date = datetime.datetime(2017, 12, 1)
+    end_date = datetime.datetime(2023, 12, 1)
+    crypto_data = CryptoMetrics(symbols=symbols, interval='1d', start_date=start_date, end_date=end_date)
+    (crypto_data.data.Crypto_Symbol.value_counts()>=crypto_data.data.Crypto_Symbol.value_counts().max()).sum()
+    crypto_data.data.Crypto_Symbol.describe()
+    crypto_data.compute_return(20).groupby(level=1).mean()
+    
+    crypto_data.data.groupby(level=1).shift(-1)
+    
+    url = f'https://eodhd.com/api/exchange-symbol-list/US?api_token=654cea806906e1.04970075&fmt=json'
+    tickers = requests.get(url).json()
+    
+    amzn_news = get_crypto_news('DOGE', EODHD_news_api_key, start_date, end_date)
+    #Manual scrape: https://github.com/nicknochnack/Stock-and-Crypto-News-ScrapingSummarizationSentiment/blob/main/Scrape%20and%20Summarize%20Stock%20News%20using%20Python%20and%20Deep%20Learning-Tutorial.ipynb
+    #Finbert for sentiment analysis: https://huggingface.co/ProsusAI/finbert
+    #https://finance.yahoo.com/topic/crypto/
+    
+    import requests
+    s=start_date.strftime('%Y-%m-%d')
+    start_date = datetime.datetime(2023, 10, 9)    
+    end_date = datetime.datetime(2023, 11, 10)    
+    e=end_date.strftime('%Y-%m-%d')
+    symbol = 'BTC'
+    url = (f'https://newsapi.org/v2/everything?q={symbol}&'
+           f'from={s}&to={e}&'
+           f'language=en&'
+           f'apiKey={NewsAPI_key}')
+        # 'sortBy=popularity&'
+        # f'domains=google.com,yahoo.com,finance,wired&'
 
-    dataset = load_dataset("monash_tsf", "tourism_monthly")
-    train_ds, val_ds, test_ds = dataset.values()
-    len(train_ds[0]['target'])
-    len(test_ds[0]["target"])
-    # Add your code here to execute when this script is run as the main script
 
-    import matplotlib.pyplot as plt
+    response = requests.get(url)
+    response_dict = response.json()
 
-    train_example = train_ds[0]
-    validation_example = val_ds[0]
-    test_example = test_ds[0]
-
-    figure, axes = plt.subplots()
-    axes.plot(train_example["target"], color="blue")
-    axes.plot(validation_example["target"], color="red", alpha=0.5)
-    axes.plot(test_example["target"], color="green", alpha=0.5)
-
-    plt.savefig("here.png")
+    print(response_dict['totalResults'])
+    response_dict['articles'][0].keys()#publishedAt is timestamp
+    response_dict['articles'][0]['publishedAt']
+    # Doc: https://newsapi.org/docs/endpoints/everything
+    # Limited by 100 articles per day...
+    # Last resort, twitter: https://medium.com/@kccmeky/how-to-collect-crypto-news-on-twitter-using-python-56f31639922e
+    # https://github.com/nicknochnack/Stock-and-Crypto-News-ScrapingSummarizationSentiment/blob/main/Scrape%20and%20Summarize%20Stock%20News%20using%20Python%20and%20Deep%20Learning-Tutorial.ipynb
+    # https://www.google.com/search?q=yahoo+finance+BTC&sca_esv=581117380&source=lnt&tbs=cdr%3A1%2Ccd_min%3A11%2F1%2F2023%2Ccd_max%3A11%2F10%2F2023&tbm=nws
+    # https://www.google.com/search?q=yahoo+finance+BTC&tbm=nws
+    # How to specify date in google search!
+    # https://community.openai.com/t/embedding-text-length-vs-accuracy/96564/13 for OPENAI embeds
 
 
+    # dataset = load_dataset("monash_tsf", "tourism_monthly")
+    # train_ds, val_ds, test_ds = dataset.values()
+    # len(train_ds[0]['target'])
+    # len(test_ds[0]["target"])
+    # # Add your code here to execute when this script is run as the main script
 
-    start_date = datetime.datetime(2018, 9, 10)
-    end_date = datetime.datetime(2022, 9, 10)
-    yf.pdr_override()
+    # train_example = train_ds[0]
+    # validation_example = val_ds[0]
+    # test_example = test_ds[0]
 
-    btc = pdr.data.get_data_yahoo(['BTC-USD'], start_date, end_date)
+    # figure, axes = plt.subplots()
+    # axes.plot(train_example["target"], color="blue")
+    # axes.plot(validation_example["target"], color="red", alpha=0.5)
+    # axes.plot(test_example["target"], color="green", alpha=0.5)
 
+    # plt.savefig("here.png")
+
+
+
+    # yf.pdr_override()
+
+    # btc = pdr.data.get_data_yahoo(['BTC-USD', 'ETH-USD', 'LTC-USD'], start_date, end_date)
+
+
+    # crypto_symbols = yf.Tickers("")  # pass an empty string to get all available symbols
+    # crypto_symbols = crypto_symbols.tickers  # get the list of symbols
+    # print(crypto_symbols)
 
