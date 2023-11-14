@@ -1,4 +1,5 @@
 import os
+import glob
 import gc
 import torch
 import copy
@@ -36,6 +37,7 @@ class ModelTrainer:
         self.save_path = save_path
         self.save_best_model = save_best_model
         self.load_model_from_path = load_model_from_path
+        self.best_val_loss = float('inf')# Init best val loss to inf
 
         ## Creates the save path if needed
         if not os.path.exists(self.save_path):
@@ -67,9 +69,30 @@ class ModelTrainer:
                     choice = int(input())
                 model_path = os.path.join(self.save_path, files[choice-1])
                 model.load_state_dict(torch.load(model_path))
-
+            
+            metrics = glob.glob(os.path.join(self.save_path, '[m,M]etric*[t,T]rain*.csv'))
+            if len(metrics) == 0:
+                print(f"No training metrics files found in {self.save_path}. Best `val_loss` will be inf.")
+            elif len(metrics) == 1:
+                csv_path = metrics[0]
+                csv = pd.read_csv(csv_path)
+                val_loss_col = [col for col in csv.columns if 'val' in col.lower() and 'loss' in col.lower()][0]
+                self.best_val_loss = csv[val_loss_col].min()
+                print(f"Metric file found, best `{val_loss_col}` is {self.best_val_loss:.4f}.")
+            else:
+                print(f"Multiple metric files found in {self.save_path}. Please choose one:")
+                for i, f in enumerate(metrics):
+                    print(f"{i+1}: {f}")
+                choice = int(input())
+                while choice < 1 or choice > len(metrics):
+                    print(f"Invalid choice. Please choose a number between 1 and {len(metrics)}:")
+                    choice = int(input())
+                csv_path = metrics[choice-1]
+                csv = pd.read_csv(csv_path)
+                val_loss_col = [col for col in csv.columns if 'val' in col.lower() and 'loss' in col.lower()][0]
+                self.best_val_loss = csv[val_loss_col].min()
+                print(f"Metric file found, best `{val_loss_col}` is {self.best_val_loss:.4f}.")
             print(f"Loaded model from {model_path}")
-
 
         return model.to(self.device)
 
@@ -166,7 +189,6 @@ class ModelTrainer:
 
 
     def train_model(self, num_epochs, early_stopping_patience=0):
-        best_val_loss = float('inf')
         epochs_without_improvement = 0
         self.model.train()
 
@@ -203,8 +225,8 @@ class ModelTrainer:
                 metrics['val_loss'].append(val_loss)
                 metrics['val_corr'].append(val_corr)
 
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
+                if val_loss < self.best_val_loss:
+                    self.best_val_loss = val_loss
                     self.best_model = copy.deepcopy(self.model)
                     if self.save_best_model:
                         self.save_model(self.best_model, self.save_path+"best_model.pt")
@@ -224,6 +246,10 @@ class ModelTrainer:
             _ = gc.collect()
 
         self.save_model(self.model, self.save_path+"model_last_iter.pt")
+
+        print("\n Training finished!")
+        print(f"Best Val Loss: {self.best_val_loss:.4f}")
+        print(f"Best Model saved at {self.save_path}best_model.pt")
 
         return self.model
 
