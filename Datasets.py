@@ -356,16 +356,15 @@ if __name__ == "__main__":
     #Finbert for sentiment analysis: https://huggingface.co/ProsusAI/finbert
     #https://finance.yahoo.com/topic/crypto/
     
-    import requests
+    start_date = datetime.datetime(2017, 12, 1)    
+    end_date = datetime.datetime(2023, 12, 1)    
     s=start_date.strftime('%Y-%m-%d')
-    start_date = datetime.datetime(2023, 10, 9)    
-    end_date = datetime.datetime(2023, 11, 10)    
     e=end_date.strftime('%Y-%m-%d')
     symbol = 'BTC'
     url = (f'https://newsapi.org/v2/everything?q={symbol}&'
-           f'from={s}&to={e}&'
-           f'language=en&'
-           f'apiKey={NewsAPI_key}')
+            f'from={s}&to={e}&'
+            f'language=en&'
+            f'apiKey={NewsAPI_key}')
         # 'sortBy=popularity&'
         # f'domains=google.com,yahoo.com,finance,wired&'
 
