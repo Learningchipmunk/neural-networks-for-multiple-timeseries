@@ -3,6 +3,7 @@ api_keys.json
 
 ## Ignore data
 *.csv
+*.npy
 *.parquet
 CryptoData/*
 NumeraiData/*
