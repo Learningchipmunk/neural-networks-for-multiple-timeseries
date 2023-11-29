@@ -16,11 +16,6 @@ from datasets import load_dataset
 import requests
 import datetime
 
-with open('api_keys.json') as f:
-    api_keys = json.load(f)
-EODHD_news_api_key = api_keys['EODHD_news_api_key']
-NewsAPI_key = api_keys['NewsAPI_key']	
-
 class NumeraiData:
     '''Downloads the latest Numerai data using the NumerAPI + Loads them using pandas. Example usage:
 
@@ -366,6 +361,12 @@ def get_crypto_news(crypto_symbol, api_key, start_date=datetime.datetime(2023, 1
     return pd.DataFrame(data_dict)
 
 if __name__ == "__main__":
+    # API keys for NewsAPI and EODHD
+    with open('api_keys.json') as f:
+        api_keys = json.load(f)
+    EODHD_news_api_key = api_keys['EODHD_news_api_key']
+    NewsAPI_key = api_keys['NewsAPI_key']	
+    
     ## top 30 Cryptos by volume traded (24h) https://finance.yahoo.com/u/yahoo-finance/watchlists/crypto-top-volume-24hr/
     # Removed TUSD, USDC, USDCE, USDT because they are stable coins
     # Added "BCH-USD", "ALGO-USD", "MANA-USD" instead
